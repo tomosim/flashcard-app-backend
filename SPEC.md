@@ -252,7 +252,7 @@ const EnrichmentSchema = z.object({
 **Flow inside `wordsService.create`**
 
 1. Normalise the input: trim it, then lowercase it for the cache key (keep the original casing for display; German nouns are capitalised).
-2. Look up `enrichment_cache` by `(language, targetLanguage, lookup)`. On a hit, use it.
+2. Look up `enrichment_cache` by `(language, targetLanguage, lookup)`. Only an entry whose `model` matches the enricher in use counts as a hit, so mock data is never served when `ENRICHER=claude` (and vice versa). A real model's result can replace a mock entry, but a mock result never replaces a real model's entry.
 3. On a miss, call the enricher with a 15-second timeout and one retry on network or 5xx errors.
 4. Validate the result with `EnrichmentSchema`. If validation fails, the status is `failed`.
 5. If `isValidWord` is false, return **422** `{ error: "NOT_A_WORD" }` and save nothing.

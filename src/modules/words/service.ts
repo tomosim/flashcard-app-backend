@@ -74,7 +74,7 @@ type EnrichResult = { status: "ok"; enrichment: Enrichment } | { status: "failed
 
 /** Cache first, then the enricher. Valid results are cached; failures never are. */
 async function enrichWithCache(enricher: Enricher, key: CacheKey, text: string) {
-  const cached = await getCachedEnrichment(key);
+  const cached = await getCachedEnrichment(key, enricher.model);
   if (cached) return { status: "ok", enrichment: cached } satisfies EnrichResult;
 
   const outcome = await runEnricher(enricher, {

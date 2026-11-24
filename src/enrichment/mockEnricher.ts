@@ -1,5 +1,8 @@
 import type { Enricher, EnrichInput, Enrichment } from "./types.js";
 
+/** The `model` stored in enrichment_cache for mock results. */
+export const MOCK_MODEL = "mock";
+
 /** Input that the mock treats as gibberish, to exercise the NOT_A_WORD path. */
 export const MOCK_INVALID_INPUT = "xxinvalid";
 
@@ -21,7 +24,7 @@ const KNOWN_LEMMAS: Record<string, Omit<Enrichment, "isValidWord" | "senses">> =
 
 /** Free, deterministic enricher for development and tests. */
 export class MockEnricher implements Enricher {
-  readonly model = "mock";
+  readonly model = MOCK_MODEL;
 
   async enrich({ text }: EnrichInput): Promise<Enrichment> {
     const input = text.trim();

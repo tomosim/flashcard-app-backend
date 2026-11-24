@@ -54,6 +54,58 @@ describe("enrichment cache", () => {
   });
 });
 
+describe("model-aware cache", () => {
+  async function cacheRow() {
+    return db.query.enrichmentCache.findFirst({ where: eq(enrichmentCache.lookup, "leistung") });
+  }
+
+  it("ignores mock entries when a real model is in use, and replaces them", async () => {
+    // Cached by the mock enricher first.
+    await (await setup(spyEnricher().enricher)).addWord("Leistung").expect(201);
+    expect((await cacheRow())!.model).toBe("mock");
+
+    const { enricher, impl } = fakeEnricher("claude-haiku-5-5");
+    impl.mockResolvedValue(validEnrichment("Leistung", "performance, achievement"));
+    const res = await (await setup(enricher)).addWord("Leistung");
+
+    expect(impl).toHaveBeenCalledTimes(1); // cache miss: the mock entry was not served
+    expect(res.body.senses[0].translation).toBe("performance, achievement");
+    expect(await cacheRow()).toMatchObject({
+      model: "claude-haiku-5-5",
+      result: expect.objectContaining({ lemma: "Leistung" }),
+    });
+  });
+
+  it("serves a real model's entry to that model on later requests", async () => {
+    const { enricher, impl } = fakeEnricher("claude-haiku-5-5");
+    impl.mockResolvedValue(validEnrichment("Leistung", "performance"));
+    await (await setup(enricher)).addWord("Leistung").expect(201);
+    await (await setup(enricher)).addWord("leistung").expect(201);
+    expect(impl).toHaveBeenCalledTimes(1);
+  });
+
+  it("never serves a real model's entry to the mock, and never overwrites it with mock data", async () => {
+    const real = fakeEnricher("claude-haiku-5-5");
+    real.impl.mockResolvedValue(validEnrichment("Leistung", "performance"));
+    await (await setup(real.enricher)).addWord("Leistung").expect(201);
+
+    const mock = spyEnricher();
+    const { app, auth, addWord } = await setup(mock.enricher);
+    const res = await addWord("Leistung");
+    expect(mock.spy).toHaveBeenCalledTimes(1);
+    expect(res.body.senses[0].translation).toBe("[mock] Leistung");
+
+    // Re-enriching in mock mode doesn't overwrite it either.
+    await request(app).post(`/api/v1/words/${res.body.id}/re-enrich`).set(auth).expect(200);
+    expect(await cacheRow()).toMatchObject({
+      model: "claude-haiku-5-5",
+      result: expect.objectContaining({
+        senses: [expect.objectContaining({ translation: "performance" })],
+      }),
+    });
+  });
+});
+
 describe("enrichment failures", () => {
   it("saves a schema-invalid result as a failed word, without caching it", async () => {
     const { enricher, impl } = fakeEnricher();

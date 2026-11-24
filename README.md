@@ -65,7 +65,7 @@ Adding a word runs it through an enricher, which returns the lemma, part of spee
 
 - `ENRICHER=mock` returns fixed data such as `"[mock] Haus"`. It knows a few inflected forms (`stand` → `stehen`, `ging` → `gehen`, `Häuser` → `Haus`), and treats `xxinvalid` as not a word.
 - `ENRICHER=claude` calls Claude Haiku 5.5 (about $0.0002 per word) with a forced `save_word` tool call. Each call has a 15-second timeout and one retry on network, timeout or 5xx errors, and every response is validated with Zod.
-- Results are cached in `enrichment_cache`, shared by all users, so each word is only paid for once.
+- Results are cached in `enrichment_cache`, shared by all users, so each word is only paid for once. The cache is model-aware: an entry is only used by the enricher that produced it, so mock data is never served in Claude mode, and running in mock mode never overwrites Claude's results.
 - If enrichment fails, the word is still saved with `enrichmentStatus: "failed"` and empty senses; `POST /words/:id/re-enrich` retries it. Failed words are left out of study batches.
 
 **Tests never call the Claude API.** Under the test runner the app always uses the mock enricher, whatever `ENRICHER` or `ANTHROPIC_API_KEY` say, and requests to `anthropic.com` are blocked.
