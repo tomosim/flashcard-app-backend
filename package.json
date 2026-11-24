@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:claude": "ENRICHER=claude tsx watch src/server.ts",
     "build": "tsc -p tsconfig.build.json && cp -R src/db/migrations dist/db/",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",

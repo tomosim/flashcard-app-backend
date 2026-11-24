@@ -28,6 +28,7 @@ The seed creates `demo@example.com` with password `demo-password`. It is safe to
 | Script                            | What it does                                                             |
 | --------------------------------- | ------------------------------------------------------------------------ |
 | `npm run dev`                     | Start the API with live reload (tsx watch)                               |
+| `npm run dev:claude`              | Same, but forces `ENRICHER=claude` (needs `ANTHROPIC_API_KEY` in `.env`) |
 | `npm run build`                   | Compile to `dist/` (and copy the migrations)                             |
 | `npm start`                       | Run the compiled build                                                   |
 | `npm run typecheck`               | Type-check without emitting                                              |
