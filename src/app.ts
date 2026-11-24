@@ -5,9 +5,17 @@ import { pinoHttp } from "pino-http";
 import { config } from "./config.js";
 import { logger } from "./lib/logger.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
+import { createEnricher } from "./enrichment/index.js";
+import type { Enricher } from "./enrichment/types.js";
 import { authRoutes } from "./modules/auth/routes.js";
+import { wordsRoutes } from "./modules/words/routes.js";
 
-export function createApp() {
+export type AppOptions = {
+  /** Defaults to the enricher selected by ENRICHER. Tests inject fakes here. */
+  enricher?: Enricher;
+};
+
+export function createApp({ enricher = createEnricher(config) }: AppOptions = {}) {
   const app = express();
 
   app.disable("x-powered-by");
@@ -22,6 +30,7 @@ export function createApp() {
   });
 
   api.use("/auth", authRoutes());
+  api.use("/words", wordsRoutes(enricher));
 
   app.use("/api/v1", api);
 

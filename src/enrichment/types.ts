@@ -32,8 +32,22 @@ export type Enrichment = z.infer<typeof EnrichmentSchema>;
 
 export type EnrichInput = { text: string; language: string; targetLanguage: string };
 
+export type EnrichOptions = { signal?: AbortSignal };
+
 export interface Enricher {
   /** Identifies the source of results, stored in enrichment_cache.model. */
   readonly model: string;
-  enrich(input: EnrichInput): Promise<Enrichment>;
+  /**
+   * Returns the enricher's raw result. Callers must validate it with
+   * EnrichmentSchema: LLM output is untrusted.
+   */
+  enrich(input: EnrichInput, options?: EnrichOptions): Promise<unknown>;
+}
+
+/** A network, timeout or 5xx failure worth retrying once. */
+export class TransientEnrichmentError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "TransientEnrichmentError";
+  }
 }

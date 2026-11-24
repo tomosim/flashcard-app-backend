@@ -1,0 +1,122 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
+import { logger } from "../lib/logger.js";
+import { ENRICH_TIMEOUT_MS } from "./run.js";
+import {
+  EnrichmentSchema,
+  TransientEnrichmentError,
+  type Enricher,
+  type EnrichInput,
+  type EnrichOptions,
+} from "./types.js";
+
+export const CLAUDE_MODEL = "claude-haiku-5-5";
+const TOOL_NAME = "save_word";
+
+const LANGUAGE_NAMES: Record<string, string> = {
+  de: "German",
+  fr: "French",
+  es: "Spanish",
+  it: "Italian",
+  nl: "Dutch",
+  pt: "Portuguese",
+  en: "English",
+};
+
+function languageName(code: string): string {
+  return LANGUAGE_NAMES[code] ?? code;
+}
+
+function systemPrompt(language: string): string {
+  return `You are a bilingual lexicographer building flashcards for an English-speaking
+learner at roughly B1–B2 level. You will receive a word or short phrase in
+${language}. It may be inflected (e.g. a conjugated verb or a plural noun).
+
+Return, via the save_word tool:
+- isValidWord: false if the input is not a real ${language} word or phrase.
+- lemma: the dictionary form. Capitalise nouns where the language requires it.
+- partOfSpeech, and for nouns: gender, definite article, and plural form.
+- senses: 1–4 distinct, common meanings, most frequent first. Each has a
+  concise English translation (several synonyms comma-separated are fine) and
+  1–2 natural, everyday example sentences in ${language}, 6–14 words long,
+  each with an English translation. Use the lemma in a natural inflected form.
+Do not invent rare or archaic meanings.`;
+}
+
+function toolInputSchema(): Anthropic.Tool.InputSchema {
+  const { $schema: _ignored, ...schema } = z.toJSONSchema(EnrichmentSchema, { io: "input" });
+  return schema as Anthropic.Tool.InputSchema;
+}
+
+/** Enriches words with Claude Haiku via a forced `save_word` tool call. */
+export class ClaudeEnricher implements Enricher {
+  readonly model = CLAUDE_MODEL;
+  private readonly client: Anthropic;
+  private readonly tool: Anthropic.Tool;
+
+  /** `clientOptions` lets tests swap in a fake `fetch`. */
+  constructor(
+    apiKey: string,
+    clientOptions: Partial<ConstructorParameters<typeof Anthropic>[0]> = {},
+  ) {
+    // Timeouts and retries are handled by runEnricher, so the SDK doesn't retry.
+    this.client = new Anthropic({
+      apiKey,
+      timeout: ENRICH_TIMEOUT_MS,
+      maxRetries: 0,
+      ...clientOptions,
+    });
+    this.tool = {
+      name: TOOL_NAME,
+      description: "Save the dictionary entry for the given word.",
+      input_schema: toolInputSchema(),
+    };
+  }
+
+  async enrich({ text, language }: EnrichInput, options: EnrichOptions = {}): Promise<unknown> {
+    let response: Anthropic.Message;
+    try {
+      response = await this.client.messages.create(
+        {
+          model: CLAUDE_MODEL,
+          max_tokens: 1024,
+          // No `temperature`: claude-haiku-5-5 rejects non-default sampling parameters.
+          system: systemPrompt(languageName(language)),
+          tools: [this.tool],
+          tool_choice: { type: "tool", name: TOOL_NAME },
+          messages: [{ role: "user", content: `Word: "${text}"` }],
+        },
+        { signal: options.signal },
+      );
+    } catch (err) {
+      if (
+        err instanceof Anthropic.APIConnectionError ||
+        err instanceof Anthropic.InternalServerError
+      ) {
+        throw new TransientEnrichmentError("Claude request failed", { cause: err });
+      }
+      throw err;
+    }
+
+    logger.info(
+      {
+        model: CLAUDE_MODEL,
+        inputTokens: response.usage.input_tokens,
+        outputTokens: response.usage.output_tokens,
+        stopReason: response.stop_reason,
+      },
+      "Claude enrichment call",
+    );
+
+    const toolUse = response.content.find(
+      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === TOOL_NAME,
+    );
+    if (!toolUse) {
+      throw new Error(
+        `Claude returned no ${TOOL_NAME} call (stop_reason: ${response.stop_reason})`,
+      );
+    }
+    // Validated with EnrichmentSchema by the caller.
+    return toolUse.input;
+  }
+}

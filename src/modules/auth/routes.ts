@@ -10,6 +10,7 @@ export function authRoutes() {
   router.use(createAuthRateLimiter());
 
   router.post("/register", async (req, res) => {
+    console.log(req.body);
     const input = validate(RegisterSchema, req.body);
     res.status(201).json(await authService.register(input));
   });

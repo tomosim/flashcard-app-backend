@@ -3,6 +3,8 @@ export type ErrorCode =
   | "UNAUTHORIZED"
   | "NOT_FOUND"
   | "EMAIL_TAKEN"
+  | "DUPLICATE_WORD"
+  | "ENRICHMENT_FAILED"
   | "NOT_A_WORD"
   | "UNSUPPORTED_LANGUAGE"
   | "RATE_LIMITED"
@@ -41,6 +43,18 @@ export class NotFoundError extends AppError {
 export class EmailTakenError extends AppError {
   constructor() {
     super(409, "EMAIL_TAKEN", "An account with this email already exists");
+  }
+}
+
+export class DuplicateWordError extends AppError {
+  constructor(message = "You already have this word in this language") {
+    super(409, "DUPLICATE_WORD", message);
+  }
+}
+
+export class EnrichmentFailedError extends AppError {
+  constructor(message = "Enrichment failed, please try again later") {
+    super(502, "ENRICHMENT_FAILED", message);
   }
 }
 
