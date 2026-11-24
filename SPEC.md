@@ -231,7 +231,7 @@ Register returns 409 if the email is taken. `displayName` is register-only and o
 
 ## Enrichment
 
-Enrichment sits behind one `Enricher` interface. `ENRICHER=mock` (the default in development and tests) returns fixed data at no cost. `ENRICHER=claude` calls Claude Haiku 5.5, which costs roughly $0.0002 per word.
+Enrichment sits behind one `Enricher` interface. `ENRICHER=mock` (the default in development, and always used in tests) returns fixed data at no cost. `ENRICHER=claude` calls Claude Haiku 5.5, which costs roughly $0.0002 per word.
 
 ```ts
 interface Enricher {
@@ -323,7 +323,7 @@ Other middleware: helmet, cors (origin from config), `express.json({ limit: "100
 - Words: create; inflected input saves the lemma; a duplicate returns 200 with `duplicate: true`; 422 for an invalid word; list with pagination and search; PATCH senses; delete; user A can't read user B's word (404).
 - Study: returns at most `limit` words, only in the requested language, only the caller's words, and an empty array when there are none.
 - Enrichment: a cache hit skips the enricher (spy on it); a schema-invalid enricher output saves the word with `failed`.
-- ClaudeEnricher: one optional integration test, skipped unless `ANTHROPIC_API_KEY` is set.
+- Tests never use the Claude API, with or without `ANTHROPIC_API_KEY`. Under the test runner the config forces `ENRICHER=mock` and drops the API key, `createEnricher` always returns the MockEnricher, the `ClaudeEnricher` constructor throws, and the test setup blocks any request to `anthropic.com`. Tests check that each of these guards holds. The ClaudeEnricher is checked by hand with `ENRICHER=claude npm run dev`.
 
 ## Milestones and instructions for Claude Code
 
