@@ -8,6 +8,8 @@ import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import { createEnricher } from "./enrichment/index.js";
 import type { Enricher } from "./enrichment/types.js";
 import { authRoutes } from "./modules/auth/routes.js";
+import { languagesRoutes } from "./modules/languages/routes.js";
+import { studyRoutes } from "./modules/study/routes.js";
 import { wordsRoutes } from "./modules/words/routes.js";
 
 export type AppOptions = {
@@ -31,6 +33,8 @@ export function createApp({ enricher = createEnricher(config) }: AppOptions = {}
 
   api.use("/auth", authRoutes());
   api.use("/words", wordsRoutes(enricher));
+  api.use("/study", studyRoutes());
+  api.use("/languages", languagesRoutes());
 
   app.use("/api/v1", api);
 
