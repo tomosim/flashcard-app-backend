@@ -149,20 +149,21 @@ Auth uses stateless JWTs with email and password. Every route except register, l
 
 All routes are under `/api/v1`, take and return JSON, and use camelCase. Supported languages are an allow-list in config, initially `de, fr, es, it, nl, pt`.
 
-| Method | Path                 | Auth | Purpose                                     |
-| ------ | -------------------- | ---- | ------------------------------------------- |
-| GET    | /health              | No   | Liveness check, returns `{ ok: true }`      |
-| POST   | /auth/register       | No   | Create a user, return token + user          |
-| POST   | /auth/login          | No   | Return token + user                         |
-| GET    | /auth/me             | Yes  | Current user                                |
-| POST   | /words               | Yes  | Add a word; the server enriches it          |
-| GET    | /words               | Yes  | List and search the user's words, paginated |
-| GET    | /words/:id           | Yes  | One word                                    |
-| PATCH  | /words/:id           | Yes  | Edit any field, including senses            |
-| POST   | /words/:id/re-enrich | Yes  | Run enrichment again and overwrite          |
-| DELETE | /words/:id           | Yes  | Delete, returns 204                         |
-| GET    | /study/batch         | Yes  | Random flashcard batch for one language     |
-| GET    | /languages           | Yes  | The user's languages with word counts       |
+| Method | Path                 | Auth | Purpose                                              |
+| ------ | -------------------- | ---- | ---------------------------------------------------- |
+| GET    | /health              | No   | Liveness check, returns `{ ok: true }`               |
+| POST   | /auth/register       | No   | Create a user, return token + user                   |
+| POST   | /auth/login          | No   | Return token + user                                  |
+| GET    | /auth/me             | Yes  | Current user                                         |
+| POST   | /words               | Yes  | Add a word; the server enriches it                   |
+| GET    | /words               | Yes  | List and search the user's words, paginated          |
+| GET    | /words/:id           | Yes  | One word                                             |
+| PATCH  | /words/:id           | Yes  | Edit any field, including senses                     |
+| POST   | /words/:id/re-enrich | Yes  | Run enrichment again and overwrite                   |
+| DELETE | /words/:id           | Yes  | Delete, returns 204                                  |
+| DELETE | /words               | Yes  | Delete all the caller's words, returns `{ deleted }` |
+| GET    | /study/batch         | Yes  | Random flashcard batch for one language              |
+| GET    | /languages           | Yes  | The user's languages with word counts                |
 
 **POST /auth/register** and **/auth/login**
 

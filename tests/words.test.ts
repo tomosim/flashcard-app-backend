@@ -268,3 +268,39 @@ describe("GET, PATCH and DELETE /words/:id", () => {
     await request(app).get(`/api/v1/words/${id}`).set(auth).expect(200);
   });
 });
+
+describe("DELETE /words", () => {
+  it("deletes all of the caller's words and returns the count", async () => {
+    await addWord({ word: "Tisch", language: "de" }).expect(201);
+    await addWord({ word: "Stuhl", language: "de" }).expect(201);
+    await addWord({ word: "chaise", language: "fr" }).expect(201);
+
+    const res = await request(app).delete("/api/v1/words").set(auth);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: 3 });
+
+    const list = await request(app).get("/api/v1/words").set(auth).expect(200);
+    expect(list.body.total).toBe(0);
+  });
+
+  it("returns deleted: 0 when the user has no words", async () => {
+    const res = await request(app).delete("/api/v1/words").set(auth);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: 0 });
+  });
+
+  it("leaves other users' words alone", async () => {
+    const userB = bearer((await registerUser(app)).token);
+    await addWord({ word: "Tisch", language: "de" }).expect(201);
+    await addWord({ word: "Stuhl", language: "de" }, userB).expect(201);
+
+    await request(app).delete("/api/v1/words").set(auth).expect(200, { deleted: 1 });
+
+    const list = await request(app).get("/api/v1/words").set(userB).expect(200);
+    expect(list.body.total).toBe(1);
+  });
+
+  it("requires auth", async () => {
+    await request(app).delete("/api/v1/words").expect(401);
+  });
+});

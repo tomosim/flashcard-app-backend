@@ -29,6 +29,10 @@ export function wordsRoutes(enricher: Enricher) {
     res.json(await wordsService.listWords(userIdOf(req), query));
   });
 
+  router.delete("/", async (req, res) => {
+    res.json(await wordsService.deleteAllWords(userIdOf(req)));
+  });
+
   router.get("/:id", async (req, res) => {
     const { id } = validate(IdParamsSchema, req.params);
     res.json(await wordsService.getWord(userIdOf(req), id));

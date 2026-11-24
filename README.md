@@ -72,6 +72,8 @@ Adding a word runs it through an enricher, which returns the lemma, part of spee
 
 ## API
 
+Full reference (types, validation rules, every error, UI notes): [docs/API.md](docs/API.md).
+
 All routes are under `/api/v1` and use JSON with camelCase fields. Every route except health, register and login needs `Authorization: Bearer <token>`.
 
 Errors always look like this:
@@ -171,6 +173,13 @@ curl -X POST $API/words/$WORD_ID/re-enrich -H "$AUTH"
 
 ```bash
 curl -X DELETE $API/words/$WORD_ID -H "$AUTH"
+```
+
+**Delete all your words** (200). Returns how many were removed.
+
+```bash
+curl -X DELETE $API/words -H "$AUTH"
+# {"deleted":15}
 ```
 
 **Study batch.** `language` is required; `limit` defaults to 10 (max 50). Returns random words with `enrichmentStatus: "ok"`.

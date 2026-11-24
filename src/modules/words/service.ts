@@ -250,3 +250,9 @@ export async function deleteWord(userId: string, id: string): Promise<void> {
     .returning({ id: words.id });
   if (deleted.length === 0) throw new NotFoundError("Word not found");
 }
+
+/** Deletes every word the user owns and returns how many were removed. */
+export async function deleteAllWords(userId: string): Promise<{ deleted: number }> {
+  const deleted = await db.delete(words).where(ownedBy(userId)).returning({ id: words.id });
+  return { deleted: deleted.length };
+}
