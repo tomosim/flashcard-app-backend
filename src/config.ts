@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { z } from "zod";
+import { isTestRuntime } from "./lib/runtime.js";
 
 const EnvSchema = z
   .object({
@@ -40,16 +41,18 @@ function loadConfig() {
     process.exit(1);
   }
   const env = parsed.data;
+  const isTest = isTestRuntime();
   return {
-    env: env.NODE_ENV,
-    isTest: env.NODE_ENV === "test",
+    env: isTest ? ("test" as const) : env.NODE_ENV,
+    isTest,
     port: env.PORT,
     // Tests always run against the separate test database.
-    databaseUrl: env.NODE_ENV === "test" ? env.TEST_DATABASE_URL : env.DATABASE_URL,
+    databaseUrl: isTest ? env.TEST_DATABASE_URL : env.DATABASE_URL,
     jwtSecret: env.JWT_SECRET,
     jwtExpiresIn: env.JWT_EXPIRES_IN,
-    enricher: env.ENRICHER,
-    anthropicApiKey: env.ANTHROPIC_API_KEY || undefined,
+    // Tests always use the mock enricher and never see an API key, whatever the env says.
+    enricher: isTest ? ("mock" as const) : env.ENRICHER,
+    anthropicApiKey: isTest ? undefined : env.ANTHROPIC_API_KEY || undefined,
     supportedLanguages: env.SUPPORTED_LANGUAGES,
     corsOrigin: env.CORS_ORIGIN,
   } as const;

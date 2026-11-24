@@ -1,18 +1,16 @@
 import { defineConfig } from "vitest/config";
 
-// The live ClaudeEnricher test only runs via `npm run test:claude`.
-const runLiveClaude = process.env.RUN_CLAUDE_TESTS === "1";
-
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     environment: "node",
     env: {
       NODE_ENV: "test",
-      // The app under test always uses the mock enricher.
+      // Tests never use Claude: always the mock enricher, never an API key.
+      // (Also enforced in config.ts, createEnricher, ClaudeEnricher and tests/helpers/setup.ts.)
       ENRICHER: "mock",
-      // Never pick up a shell-exported key unless the live test was requested.
-      ...(!runLiveClaude && { ANTHROPIC_API_KEY: "" }),
+      ANTHROPIC_API_KEY: "",
+      ANTHROPIC_AUTH_TOKEN: "",
     },
     globalSetup: ["tests/helpers/globalSetup.ts"],
     setupFiles: ["tests/helpers/setup.ts"],

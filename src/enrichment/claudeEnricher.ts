@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { logger } from "../lib/logger.js";
+import { isTestRuntime } from "../lib/runtime.js";
 import { ENRICH_TIMEOUT_MS } from "./run.js";
 import {
   EnrichmentSchema,
@@ -54,18 +55,12 @@ export class ClaudeEnricher implements Enricher {
   private readonly client: Anthropic;
   private readonly tool: Anthropic.Tool;
 
-  /** `clientOptions` lets tests swap in a fake `fetch`. */
-  constructor(
-    apiKey: string,
-    clientOptions: Partial<ConstructorParameters<typeof Anthropic>[0]> = {},
-  ) {
+  constructor(apiKey: string) {
+    if (isTestRuntime()) {
+      throw new Error("ClaudeEnricher must never be used in tests; use MockEnricher");
+    }
     // Timeouts and retries are handled by runEnricher, so the SDK doesn't retry.
-    this.client = new Anthropic({
-      apiKey,
-      timeout: ENRICH_TIMEOUT_MS,
-      maxRetries: 0,
-      ...clientOptions,
-    });
+    this.client = new Anthropic({ apiKey, timeout: ENRICH_TIMEOUT_MS, maxRetries: 0 });
     this.tool = {
       name: TOOL_NAME,
       description: "Save the dictionary entry for the given word.",
