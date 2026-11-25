@@ -16,14 +16,38 @@ export function fakeEnricher(model = "fake") {
   return { enricher, impl };
 }
 
-export function validEnrichment(lemma: string, translation = `${lemma} (en)`) {
+/** One valid enrichment entry: a neuter noun unless overridden. */
+export function validEntry(
+  lemma: string,
+  translation = `${lemma} (en)`,
+  overrides: Record<string, unknown> = {},
+) {
   return {
-    isValidWord: true,
     lemma,
     partOfSpeech: "noun",
     gender: "neuter",
     article: "das",
     plural: null,
+    conjugation: null,
     senses: [{ translation, examples: [{ text: `Das ${lemma}.`, translation: `The ${lemma}.` }] }],
+    ...overrides,
   };
+}
+
+/** A valid enrichment with a single entry. */
+export function validEnrichment(
+  lemma: string,
+  translation?: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return { isValidWord: true, entries: [validEntry(lemma, translation, overrides)] };
+}
+
+/** A valid six-person conjugation table. */
+export function validConjugation(prefix = "x") {
+  const persons = ["ich", "du", "er/sie/es", "wir", "ihr", "sie"].map((pronoun, i) => ({
+    pronoun,
+    form: `${prefix}${i}`,
+  }));
+  return { present: persons, past: persons, perfect: `hat ${prefix}` };
 }

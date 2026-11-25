@@ -16,17 +16,18 @@ export function wordsRoutes(enricher: Enricher) {
 
   router.post("/", async (req, res) => {
     const input = validate(CreateWordSchema, req.body);
-    const { word, duplicate } = await wordsService.createWord(userIdOf(req), input, enricher);
-    if (duplicate) {
-      res.status(200).json({ ...word, duplicate: true });
-    } else {
-      res.status(201).json(word);
-    }
+    const { items, created } = await wordsService.createWord(userIdOf(req), input, enricher);
+    // 201 if at least one word was saved; 200 if the user already had them all.
+    res.status(created ? 201 : 200).json({ items });
   });
 
   router.get("/", async (req, res) => {
     const query = validate(ListWordsQuerySchema, req.query);
     res.json(await wordsService.listWords(userIdOf(req), query));
+  });
+
+  router.delete("/", async (req, res) => {
+    res.json(await wordsService.deleteAllWords(userIdOf(req)));
   });
 
   router.get("/:id", async (req, res) => {

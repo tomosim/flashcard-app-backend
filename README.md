@@ -15,7 +15,7 @@ npm install
 cp .env.example .env          # then set JWT_SECRET to a random string of 32+ characters
 docker compose up -d          # Postgres for dev (port 5432) and tests (port 5433)
 npm run db:migrate            # create the tables
-npm run db:seed               # optional: demo user and 15 German words
+npm run db:seed               # optional: demo user and 17 German words
 npm run dev                   # http://localhost:3000/api/v1
 ```
 
@@ -61,7 +61,7 @@ All variables are parsed with Zod at startup; the app exits with a clear message
 
 ## Enrichment
 
-Adding a word runs it through an enricher, which returns the lemma, part of speech, gender, article, plural and 1–4 senses with example sentences.
+Adding a word runs it through an enricher, which returns one entry per part of speech the word can be (e.g. `beeindruckt` → adjective `beeindruckt` + verb `beeindrucken`). Each has the lemma, part of speech, gender, article, plural, conjugation tables for verbs (present, simple past and perfect), and 1–4 senses with example sentences. Each entry is saved as its own word.
 
 - `ENRICHER=mock` returns fixed data such as `"[mock] Haus"`. It knows a few inflected forms (`stand` → `stehen`, `ging` → `gehen`, `Häuser` → `Haus`), and treats `xxinvalid` as not a word.
 - `ENRICHER=claude` calls Claude Haiku 5.5 (about $0.0002 per word) with a forced `save_word` tool call. Each call has a 15-second timeout and one retry on network, timeout or 5xx errors, and every response is validated with Zod.
@@ -71,6 +71,8 @@ Adding a word runs it through an enricher, which returns the lemma, part of spee
 **Tests never call the Claude API.** Under the test runner the app always uses the mock enricher, whatever `ENRICHER` or `ANTHROPIC_API_KEY` say, and requests to `anthropic.com` are blocked.
 
 ## API
+
+Full reference (types, validation rules, every error, UI notes): [docs/API.md](docs/API.md).
 
 All routes are under `/api/v1` and use JSON with camelCase fields. Every route except health, register and login needs `Authorization: Bearer <token>`.
 
@@ -134,7 +136,7 @@ curl $API/auth/me -H "$AUTH"
 # {"user":{"id":"…","email":"demo@example.com","displayName":"Demo"}}
 ```
 
-**Add a word.** Only `word` and `language` are required. Returns 201 with the enriched word, or 200 with `"duplicate": true` if you already have that lemma.
+**Add a word.** Only `word` and `language` are required. Returns `{ items }`, one word per part of speech, each with `duplicate: true` if you already had that lemma and part of speech: 201 if at least one is new, 200 if all were duplicates.
 
 ```bash
 curl -X POST $API/words -H "$AUTH" -H 'Content-Type: application/json' \
@@ -171,6 +173,13 @@ curl -X POST $API/words/$WORD_ID/re-enrich -H "$AUTH"
 
 ```bash
 curl -X DELETE $API/words/$WORD_ID -H "$AUTH"
+```
+
+**Delete all your words** (200). Returns how many were removed.
+
+```bash
+curl -X DELETE $API/words -H "$AUTH"
+# {"deleted":15}
 ```
 
 **Study batch.** `language` is required; `limit` defaults to 10 (max 50). Returns random words with `enrichmentStatus: "ok"`.

@@ -28,6 +28,7 @@ const GERMAN_WORDS = [
   "Freundschaft",
   "vielleicht",
   "Bahnhof",
+  "beeindruckt",
 ];
 
 async function seed() {
@@ -61,22 +62,26 @@ async function seed() {
       })
       .onConflictDoNothing();
 
+    // One word per entry (part of speech).
     const rows = await db
       .insert(words)
-      .values({
-        userId: user.id,
-        word: enrichment.lemma,
-        sourceForm: enrichment.lemma === text ? null : text,
-        language: LANGUAGE,
-        targetLanguage: TARGET_LANGUAGE,
-        partOfSpeech: enrichment.partOfSpeech,
-        gender: enrichment.gender,
-        article: enrichment.article,
-        plural: enrichment.plural,
-        senses: enrichment.senses,
-        tags: ["seed"],
-        enrichmentStatus: "ok",
-      })
+      .values(
+        enrichment.entries.map((entry) => ({
+          userId: user.id,
+          word: entry.lemma,
+          sourceForm: entry.lemma === text ? null : text,
+          language: LANGUAGE,
+          targetLanguage: TARGET_LANGUAGE,
+          partOfSpeech: entry.partOfSpeech,
+          gender: entry.gender,
+          article: entry.article,
+          plural: entry.plural,
+          conjugation: entry.partOfSpeech === "verb" ? entry.conjugation : null,
+          senses: entry.senses,
+          tags: ["seed"],
+          enrichmentStatus: "ok" as const,
+        })),
+      )
       .onConflictDoNothing()
       .returning({ id: words.id });
     inserted += rows.length;

@@ -8,7 +8,13 @@ import { runEnricher } from "../src/enrichment/run.js";
 import { TransientEnrichmentError, type Enricher } from "../src/enrichment/types.js";
 import { bearer, registerUser } from "./helpers/auth.js";
 import { truncateAll } from "./helpers/db.js";
-import { fakeEnricher, spyEnricher, validEnrichment } from "./helpers/enrichers.js";
+import {
+  fakeEnricher,
+  spyEnricher,
+  validConjugation,
+  validEnrichment,
+  validEntry,
+} from "./helpers/enrichers.js";
 
 beforeEach(truncateAll);
 
@@ -20,6 +26,11 @@ async function setup(enricher: Enricher) {
   return { app, auth, addWord };
 }
 
+/** The first (often only) word a POST /words response returned. */
+function first(res: request.Response) {
+  return res.body.items[0];
+}
+
 describe("enrichment cache", () => {
   it("writes valid results to the cache, keyed by the lowercased input", async () => {
     const { addWord } = await setup(spyEnricher().enricher);
@@ -27,20 +38,20 @@ describe("enrichment cache", () => {
     const row = await db.query.enrichmentCache.findFirst();
     expect(row).toMatchObject({ language: "de", targetLanguage: "en", lookup: "häuser" });
     expect(row!.model).toBe("mock");
-    expect(row!.result.lemma).toBe("Haus");
+    expect(row!.result.entries[0]!.lemma).toBe("Haus");
   });
 
   it("skips the enricher on a cache hit, including for other users", async () => {
     const { enricher, spy } = spyEnricher();
-    const first = await setup(enricher);
-    await first.addWord("Fenster").expect(201);
+    const firstUser = await setup(enricher);
+    await firstUser.addWord("Fenster").expect(201);
     expect(spy).toHaveBeenCalledTimes(1);
 
     // A different user, different casing: same cache entry.
     const second = await setup(enricher);
     const res = await second.addWord("FENSTER");
     expect(res.status).toBe(201);
-    expect(res.body.word).toBe("Fenster");
+    expect(first(res).word).toBe("Fenster");
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
@@ -69,10 +80,12 @@ describe("model-aware cache", () => {
     const res = await (await setup(enricher)).addWord("Leistung");
 
     expect(impl).toHaveBeenCalledTimes(1); // cache miss: the mock entry was not served
-    expect(res.body.senses[0].translation).toBe("performance, achievement");
+    expect(first(res).senses[0].translation).toBe("performance, achievement");
     expect(await cacheRow()).toMatchObject({
       model: "claude-haiku-5-5",
-      result: expect.objectContaining({ lemma: "Leistung" }),
+      result: expect.objectContaining({
+        entries: [expect.objectContaining({ lemma: "Leistung" })],
+      }),
     });
   });
 
@@ -93,14 +106,21 @@ describe("model-aware cache", () => {
     const { app, auth, addWord } = await setup(mock.enricher);
     const res = await addWord("Leistung");
     expect(mock.spy).toHaveBeenCalledTimes(1);
-    expect(res.body.senses[0].translation).toBe("[mock] Leistung");
+    expect(first(res).senses[0].translation).toBe("[mock] Leistung");
 
     // Re-enriching in mock mode doesn't overwrite it either.
-    await request(app).post(`/api/v1/words/${res.body.id}/re-enrich`).set(auth).expect(200);
+    await request(app)
+      .post(`/api/v1/words/${first(res).id}/re-enrich`)
+      .set(auth)
+      .expect(200);
     expect(await cacheRow()).toMatchObject({
       model: "claude-haiku-5-5",
       result: expect.objectContaining({
-        senses: [expect.objectContaining({ translation: "performance" })],
+        entries: [
+          expect.objectContaining({
+            senses: [expect.objectContaining({ translation: "performance" })],
+          }),
+        ],
       }),
     });
   });
@@ -109,17 +129,20 @@ describe("model-aware cache", () => {
 describe("enrichment failures", () => {
   it("saves a schema-invalid result as a failed word, without caching it", async () => {
     const { enricher, impl } = fakeEnricher();
-    impl.mockResolvedValue({ isValidWord: true, lemma: "Haus", senses: "not an array" });
+    impl.mockResolvedValue({ isValidWord: true, entries: [{ lemma: "Haus", senses: "nope" }] });
     const { addWord } = await setup(enricher);
 
     const res = await addWord("  Häuser ");
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({
+    expect(res.body.items).toHaveLength(1);
+    expect(first(res)).toMatchObject({
       word: "Häuser",
       sourceForm: null,
       partOfSpeech: "other",
+      conjugation: null,
       senses: [],
       enrichmentStatus: "failed",
+      duplicate: false,
     });
     expect(impl).toHaveBeenCalledTimes(1); // validation failures are not retried
     expect(await db.$count(enrichmentCache)).toBe(0);
@@ -132,7 +155,7 @@ describe("enrichment failures", () => {
 
     const res = await addWord("Haus");
     expect(res.status).toBe(201);
-    expect(res.body.enrichmentStatus).toBe("failed");
+    expect(first(res).enrichmentStatus).toBe("failed");
     expect(impl).toHaveBeenCalledTimes(2);
   });
 
@@ -145,7 +168,10 @@ describe("enrichment failures", () => {
 
     const res = await addWord("Haus");
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({ enrichmentStatus: "ok", senses: [{ translation: "house" }] });
+    expect(first(res)).toMatchObject({
+      enrichmentStatus: "ok",
+      senses: [{ translation: "house" }],
+    });
     expect(impl).toHaveBeenCalledTimes(2);
   });
 
@@ -155,7 +181,7 @@ describe("enrichment failures", () => {
     const { addWord } = await setup(enricher);
 
     const res = await addWord("Haus");
-    expect(res.body.enrichmentStatus).toBe("failed");
+    expect(first(res).enrichmentStatus).toBe("failed");
     expect(impl).toHaveBeenCalledTimes(1);
   });
 
@@ -163,10 +189,12 @@ describe("enrichment failures", () => {
     const { enricher, impl } = fakeEnricher();
     impl.mockRejectedValue(new Error("boom"));
     const { addWord } = await setup(enricher);
-    const first = await addWord("Haus");
+    const firstRes = await addWord("Haus");
     const second = await addWord(" haus ");
     expect(second.status).toBe(200);
-    expect(second.body).toMatchObject({ id: first.body.id, duplicate: true });
+    expect(second.body.items).toEqual([
+      expect.objectContaining({ id: first(firstRes).id, duplicate: true }),
+    ]);
   });
 });
 
@@ -196,7 +224,7 @@ describe("POST /words/:id/re-enrich", () => {
     const { enricher, impl } = fakeEnricher("fake-v1");
     impl.mockResolvedValue(validEnrichment("Haus", "house"));
     const { app, auth, addWord } = await setup(enricher);
-    const { body: created } = await addWord("Häuser");
+    const created = first(await addWord("Häuser"));
     expect(created).toMatchObject({ word: "Haus", sourceForm: "Häuser" });
 
     impl.mockResolvedValue(validEnrichment("Haus", "house, building"));
@@ -215,18 +243,18 @@ describe("POST /words/:id/re-enrich", () => {
     const cached = await db.query.enrichmentCache.findFirst({
       where: eq(enrichmentCache.lookup, "häuser"),
     });
-    expect(cached!.result.senses[0]!.translation).toBe("house, building");
+    expect(cached!.result.entries[0]!.senses[0]!.translation).toBe("house, building");
   });
 
   it("repairs a failed word", async () => {
     const { enricher, impl } = fakeEnricher();
     impl.mockRejectedValue(new Error("down"));
     const { app, auth, addWord } = await setup(enricher);
-    const { body: created } = await addWord("stand");
+    const created = first(await addWord("stand"));
     expect(created.enrichmentStatus).toBe("failed");
 
     impl.mockReset();
-    impl.mockResolvedValue({ ...validEnrichment("stehen", "to stand"), partOfSpeech: "verb" });
+    impl.mockResolvedValue(validEnrichment("stehen", "to stand", { partOfSpeech: "verb" }));
     const res = await request(app).post(`/api/v1/words/${created.id}/re-enrich`).set(auth);
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
@@ -241,7 +269,7 @@ describe("POST /words/:id/re-enrich", () => {
     const { enricher, impl } = fakeEnricher();
     impl.mockResolvedValue(validEnrichment("Haus", "house"));
     const { app, auth, addWord } = await setup(enricher);
-    const { body: created } = await addWord("Haus");
+    const created = first(await addWord("Haus"));
 
     impl.mockRejectedValue(new TransientEnrichmentError("down"));
     const res = await request(app).post(`/api/v1/words/${created.id}/re-enrich`).set(auth);
@@ -259,11 +287,143 @@ describe("POST /words/:id/re-enrich", () => {
     impl.mockResolvedValue(validEnrichment("stehen"));
     await addWord("stehen").expect(201);
     impl.mockRejectedValue(new Error("down"));
-    const { body: failed } = await addWord("stand");
+    const failed = first(await addWord("stand"));
 
     impl.mockResolvedValue(validEnrichment("stehen"));
     const res = await request(app).post(`/api/v1/words/${failed.id}/re-enrich`).set(auth);
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe("DUPLICATE_WORD");
+  });
+});
+
+describe("multiple parts of speech and conjugations", () => {
+  const adjective = () =>
+    validEntry("beeindruckt", "impressed", {
+      partOfSpeech: "adjective",
+      gender: null,
+      article: null,
+    });
+  const verb = () =>
+    validEntry("beeindrucken", "to impress", {
+      partOfSpeech: "verb",
+      gender: null,
+      article: null,
+      conjugation: validConjugation("beeindruck"),
+    });
+
+  it("saves one word per entry, each with its own lemma and sourceForm", async () => {
+    const { enricher, impl } = fakeEnricher();
+    impl.mockResolvedValue({ isValidWord: true, entries: [adjective(), verb()] });
+    const { addWord } = await setup(enricher);
+
+    const res = await addWord("beeindruckt");
+    expect(res.status).toBe(201);
+    expect(res.body.items).toEqual([
+      expect.objectContaining({
+        word: "beeindruckt",
+        sourceForm: null,
+        partOfSpeech: "adjective",
+        conjugation: null,
+        duplicate: false,
+      }),
+      expect.objectContaining({
+        word: "beeindrucken",
+        sourceForm: "beeindruckt",
+        partOfSpeech: "verb",
+        conjugation: validConjugation("beeindruck"),
+        duplicate: false,
+      }),
+    ]);
+    expect(await db.$count(words)).toBe(2);
+  });
+
+  it("returns 200 with every entry marked duplicate when the user has them all", async () => {
+    const { enricher, impl } = fakeEnricher();
+    impl.mockResolvedValue({ isValidWord: true, entries: [adjective(), verb()] });
+    const { addWord } = await setup(enricher);
+    const created = (await addWord("beeindruckt").expect(201)).body.items;
+
+    const res = await addWord("Beeindruckt");
+    expect(res.status).toBe(200);
+    expect(res.body.items).toEqual([
+      expect.objectContaining({ id: created[0].id, duplicate: true }),
+      expect.objectContaining({ id: created[1].id, duplicate: true }),
+    ]);
+  });
+
+  it("returns 201 with mixed duplicate flags when only some entries are new", async () => {
+    const { enricher, impl } = fakeEnricher();
+    const { addWord } = await setup(enricher);
+    impl.mockResolvedValue({ isValidWord: true, entries: [verb()] });
+    const existing = first(await addWord("beeindrucken").expect(201));
+
+    impl.mockResolvedValue({ isValidWord: true, entries: [adjective(), verb()] });
+    const res = await addWord("beeindruckt");
+    expect(res.status).toBe(201);
+    expect(res.body.items).toEqual([
+      expect.objectContaining({ word: "beeindruckt", duplicate: false }),
+      expect.objectContaining({ id: existing.id, word: "beeindrucken", duplicate: true }),
+    ]);
+  });
+
+  it("allows the same lemma with a different part of speech", async () => {
+    const { enricher, impl } = fakeEnricher();
+    const { addWord } = await setup(enricher);
+    impl.mockResolvedValue(validEnrichment("laufen", "to run", { partOfSpeech: "verb" }));
+    await addWord("laufen").expect(201);
+    impl.mockResolvedValue(validEnrichment("Laufen", "running"));
+    const res = await addWord("das Laufen");
+    expect(res.status).toBe(201);
+    expect(first(res)).toMatchObject({ word: "Laufen", partOfSpeech: "noun" });
+  });
+
+  it("drops a conjugation the enricher sent for a non-verb", async () => {
+    const { enricher, impl } = fakeEnricher();
+    impl.mockResolvedValue(validEnrichment("Haus", "house", { conjugation: validConjugation() }));
+    const { addWord } = await setup(enricher);
+    expect(first(await addWord("Haus")).conjugation).toBeNull();
+  });
+
+  it("fails enrichment when a conjugation table does not have six persons", async () => {
+    const { enricher, impl } = fakeEnricher();
+    const bad = validConjugation();
+    bad.present = bad.present.slice(0, 5);
+    impl.mockResolvedValue(
+      validEnrichment("gehen", "to go", { partOfSpeech: "verb", conjugation: bad }),
+    );
+    const { addWord } = await setup(enricher);
+    expect(first(await addWord("gehen")).enrichmentStatus).toBe("failed");
+  });
+
+  it("re-enrich updates the word from the entry matching its part of speech", async () => {
+    const { enricher, impl } = fakeEnricher();
+    impl.mockResolvedValue({ isValidWord: true, entries: [adjective(), verb()] });
+    const { app, auth, addWord } = await setup(enricher);
+    const verbWord = (await addWord("beeindruckt")).body.items[1];
+
+    const updatedVerb = {
+      ...verb(),
+      senses: verb().senses.map((s) => ({ ...s, translation: "to wow" })),
+    };
+    impl.mockResolvedValue({ isValidWord: true, entries: [adjective(), updatedVerb] });
+    const res = await request(app).post(`/api/v1/words/${verbWord.id}/re-enrich`).set(auth);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: verbWord.id,
+      word: "beeindrucken",
+      partOfSpeech: "verb",
+      senses: [{ translation: "to wow" }],
+    });
+    expect(await db.$count(words)).toBe(2);
+  });
+
+  it("the mock enricher returns two entries for beeindruckt, with a verb conjugation", async () => {
+    const { addWord } = await setup(spyEnricher().enricher);
+    const res = await addWord("beeindruckt").expect(201);
+    expect(res.body.items.map((w: { partOfSpeech: string }) => w.partOfSpeech)).toEqual([
+      "adjective",
+      "verb",
+    ]);
+    expect(res.body.items[1].conjugation.present).toHaveLength(6);
   });
 });
