@@ -50,7 +50,7 @@ All variables are parsed with Zod at startup; the app exits with a clear message
 | -------------------------- | ---------------------- | ------------------- | ---------------------------------------------------------- |
 | `PORT`                     | No                     | `3000`              | HTTP port                                                  |
 | `DATABASE_URL`             | Yes                    |                     | Dev/production Postgres connection string                  |
-| `TEST_DATABASE_URL`        | Yes                    |                     | Postgres used by the tests (always, under the test runner) |
+| `TEST_DATABASE_URL`        | For tests              |                     | Postgres used by the tests (always, under the test runner) |
 | `JWT_SECRET`               | Yes                    |                     | HS256 signing secret, at least 32 characters               |
 | `JWT_EXPIRES_IN`           | No                     | `7d`                | Access token lifetime                                      |
 | `ENRICHER`                 | No                     | `mock`              | `mock` (free, fixed data) or `claude`                      |
