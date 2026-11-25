@@ -10,6 +10,7 @@ import type { Enricher } from "./enrichment/types.js";
 import { authRoutes } from "./modules/auth/routes.js";
 import { languagesRoutes } from "./modules/languages/routes.js";
 import { studyRoutes } from "./modules/study/routes.js";
+import { tokensRoutes } from "./modules/tokens/routes.js";
 import { wordsRoutes } from "./modules/words/routes.js";
 
 export type AppOptions = {
@@ -35,6 +36,7 @@ export function createApp({ enricher = createEnricher(config) }: AppOptions = {}
   api.use("/words", wordsRoutes(enricher));
   api.use("/study", studyRoutes());
   api.use("/languages", languagesRoutes());
+  api.use("/tokens", tokensRoutes());
 
   app.use("/api/v1", api);
 

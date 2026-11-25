@@ -1,8 +1,10 @@
 export type ErrorCode =
   | "VALIDATION_ERROR"
   | "UNAUTHORIZED"
+  | "FORBIDDEN"
   | "NOT_FOUND"
   | "EMAIL_TAKEN"
+  | "TOKEN_LIMIT_REACHED"
   | "DUPLICATE_WORD"
   | "ENRICHMENT_FAILED"
   | "NOT_A_WORD"
@@ -34,6 +36,12 @@ export class UnauthorizedError extends AppError {
   }
 }
 
+export class ForbiddenError extends AppError {
+  constructor(message = "Forbidden") {
+    super(403, "FORBIDDEN", message);
+  }
+}
+
 export class NotFoundError extends AppError {
   constructor(message = "Not found") {
     super(404, "NOT_FOUND", message);
@@ -43,6 +51,12 @@ export class NotFoundError extends AppError {
 export class EmailTakenError extends AppError {
   constructor() {
     super(409, "EMAIL_TAKEN", "An account with this email already exists");
+  }
+}
+
+export class TokenLimitReachedError extends AppError {
+  constructor(limit: number) {
+    super(409, "TOKEN_LIMIT_REACHED", `You can have at most ${limit} active API tokens`);
   }
 }
 
