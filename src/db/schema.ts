@@ -10,7 +10,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import type { Enrichment, Gender, PartOfSpeech, Sense } from "../enrichment/types.js";
+import type { Conjugation, Enrichment, Gender, PartOfSpeech, Sense } from "../enrichment/types.js";
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 
@@ -38,6 +38,8 @@ export const words = pgTable(
     gender: text("gender").$type<Gender>(),
     article: text("article"),
     plural: text("plural"),
+    // Verbs only; null for every other part of speech.
+    conjugation: jsonb("conjugation").$type<Conjugation>(),
     senses: jsonb("senses").$type<Sense[]>().notNull().default([]),
     notes: text("notes"),
     tags: text("tags")
@@ -53,7 +55,13 @@ export const words = pgTable(
       .$onUpdate(() => new Date()),
   },
   (t) => [
-    uniqueIndex("words_user_language_word_unique").on(t.userId, t.language, sql`lower(${t.word})`),
+    // Per part of speech, so e.g. the verb "laufen" and the noun "Laufen" can coexist.
+    uniqueIndex("words_user_language_word_pos_unique").on(
+      t.userId,
+      t.language,
+      sql`lower(${t.word})`,
+      t.partOfSpeech,
+    ),
     // Also serves as the user_id index (leftmost column), so no separate one is needed.
     index("words_user_language_idx").on(t.userId, t.language),
     check(

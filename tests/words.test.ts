@@ -18,8 +18,11 @@ beforeEach(async () => {
 const addWord = (body: object, headers = auth) =>
   request(app).post("/api/v1/words").set(headers).send(body);
 
+/** The first (often only) word a POST /words response returned. */
+const first = (res: request.Response) => res.body.items[0];
+
 describe("POST /words", () => {
-  it("creates an enriched word and returns 201 with the full word", async () => {
+  it("creates an enriched word and returns 201 with the full word in items", async () => {
     const res = await addWord({
       word: "  Tisch ",
       language: "de",
@@ -28,7 +31,8 @@ describe("POST /words", () => {
       notes: "",
     });
     expect(res.status).toBe(201);
-    expect(res.body).toEqual({
+    expect(res.body.items).toHaveLength(1);
+    expect(first(res)).toEqual({
       id: expect.stringMatching(/^[0-9a-f-]{36}$/),
       word: "Tisch",
       sourceForm: null,
@@ -38,6 +42,7 @@ describe("POST /words", () => {
       gender: null,
       article: null,
       plural: null,
+      conjugation: null,
       senses: [
         {
           translation: "[mock] Tisch",
@@ -50,22 +55,29 @@ describe("POST /words", () => {
       enrichmentStatus: "ok",
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
+      duplicate: false,
     });
-    expect(res.body).not.toHaveProperty("userId");
-    expect(res.body).not.toHaveProperty("duplicate");
+    expect(first(res)).not.toHaveProperty("userId");
   });
 
   it("saves the lemma for inflected input, keeping what was typed as sourceForm", async () => {
     const res = await addWord({ word: "stand", language: "de" });
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({ word: "stehen", sourceForm: "stand", partOfSpeech: "verb" });
+    expect(first(res)).toMatchObject({ word: "stehen", sourceForm: "stand", partOfSpeech: "verb" });
+    expect(first(res).conjugation).toMatchObject({
+      present: expect.any(Array),
+      past: expect.any(Array),
+      perfect: expect.any(String),
+    });
   });
 
   it("returns 200 with duplicate: true when the user already has the lemma", async () => {
-    const first = await addWord({ word: "stehen", language: "de" });
+    const original = await addWord({ word: "stehen", language: "de" });
     const second = await addWord({ word: "stand", language: "de" });
     expect(second.status).toBe(200);
-    expect(second.body).toMatchObject({ id: first.body.id, word: "stehen", duplicate: true });
+    expect(second.body.items).toEqual([
+      expect.objectContaining({ id: first(original).id, word: "stehen", duplicate: true }),
+    ]);
     expect(await db.$count((await import("../src/db/schema.js")).words)).toBe(1);
   });
 
@@ -182,7 +194,7 @@ describe("GET, PATCH and DELETE /words/:id", () => {
   let id: string;
 
   beforeEach(async () => {
-    id = (await addWord({ word: "Haus", language: "de" })).body.id;
+    id = first(await addWord({ word: "Haus", language: "de" })).id;
   });
 
   it("gets one word", async () => {
@@ -243,6 +255,30 @@ describe("GET, PATCH and DELETE /words/:id", () => {
       const res = await request(app).patch(`/api/v1/words/${id}`).set(auth).send(body);
       expect(res.status, JSON.stringify(body)).toBe(400);
     }
+  });
+
+  it("sets and clears the conjugation on PATCH", async () => {
+    const persons = ["ich", "du", "er/sie/es", "wir", "ihr", "sie"].map((pronoun) => ({
+      pronoun,
+      form: "x",
+    }));
+    const conjugation = { present: persons, past: persons, perfect: "hat x" };
+    const set = await request(app).patch(`/api/v1/words/${id}`).set(auth).send({ conjugation });
+    expect(set.status).toBe(200);
+    expect(set.body.conjugation).toEqual(conjugation);
+
+    const bad = { ...conjugation, past: persons.slice(1) };
+    await request(app)
+      .patch(`/api/v1/words/${id}`)
+      .set(auth)
+      .send({ conjugation: bad })
+      .expect(400);
+
+    const cleared = await request(app)
+      .patch(`/api/v1/words/${id}`)
+      .set(auth)
+      .send({ conjugation: null });
+    expect(cleared.body.conjugation).toBeNull();
   });
 
   it("returns 409 DUPLICATE_WORD when renaming to a word the user already has", async () => {

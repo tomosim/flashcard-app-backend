@@ -35,12 +35,31 @@ ${language}. It may be inflected (e.g. a conjugated verb or a plural noun).
 
 Return, via the save_word tool:
 - isValidWord: false if the input is not a real ${language} word or phrase.
-- lemma: the dictionary form. Capitalise nouns where the language requires it.
-- partOfSpeech, and for nouns: gender, definite article, and plural form.
-- senses: 1–4 distinct, common meanings, most frequent first. Each has a
-  concise English translation (several synonyms comma-separated are fine) and
-  1–2 natural, everyday example sentences in ${language}, 6–14 words long,
-  each with an English translation. Use the lemma in a natural inflected form.
+- entries: one entry per distinct part of speech the input form is commonly
+  used as, most common first (at most 3). For example, German "beeindruckt" is
+  both the adjective "beeindruckt" and a form of the verb "beeindrucken", so it
+  gets two entries. A participle that is also a common adjective counts as both.
+  Most words have a single entry; do not add entries for rare or archaic uses.
+
+Each entry has:
+- lemma: the dictionary form for that part of speech. Capitalise nouns where
+  the language requires it.
+- partOfSpeech, and for nouns: gender, definite article, and plural form
+  (otherwise null).
+- conjugation: for verbs only (null for every other part of speech):
+  - present: the 6 present-tense forms, each { pronoun, form }, with the
+    ${language} pronoun, in standard order: 1st, 2nd, 3rd person singular, then
+    1st, 2nd, 3rd person plural (for German: ich, du, er/sie/es, wir, ihr, sie).
+    "form" is the verb form alone, without the pronoun; separable verbs keep
+    the particle (e.g. "fange an").
+  - past: the same 6 persons in the simple past (German: Präteritum).
+  - perfect: the 3rd person singular perfect with its auxiliary
+    (e.g. "hat beeindruckt", "ist gegangen").
+- senses: 1–4 distinct, common meanings for that part of speech, most frequent
+  first. Each has a concise English translation (several synonyms
+  comma-separated are fine) and 1–2 natural, everyday example sentences in
+  ${language}, 6–14 words long, each with an English translation. Use the lemma
+  in a natural inflected form.
 Do not invent rare or archaic meanings.`;
 }
 
@@ -74,7 +93,8 @@ export class ClaudeEnricher implements Enricher {
       response = await this.client.messages.create(
         {
           model: CLAUDE_MODEL,
-          max_tokens: 1024,
+          // Two entries plus conjugation tables can exceed 1024 tokens.
+          max_tokens: 2500,
           // No `temperature`: claude-haiku-5-5 rejects non-default sampling parameters.
           system: systemPrompt(languageName(language)),
           tools: [this.tool],

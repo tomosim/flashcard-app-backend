@@ -8,7 +8,7 @@ import {
   type CacheKey,
 } from "../../enrichment/cache.js";
 import { runEnricher } from "../../enrichment/run.js";
-import type { Enricher, Enrichment } from "../../enrichment/types.js";
+import type { Enricher, Enrichment, Entry, PartOfSpeech } from "../../enrichment/types.js";
 import {
   DuplicateWordError,
   EnrichmentFailedError,
@@ -45,8 +45,13 @@ function ownedBy(userId: string, ...conditions: (SQL | undefined)[]) {
   return and(eq(words.userId, userId), ...conditions);
 }
 
-function sameWord(userId: string, language: string, word: string) {
-  return ownedBy(userId, eq(words.language, language), sql`lower(${words.word}) = lower(${word})`);
+function sameWord(userId: string, language: string, word: string, partOfSpeech: PartOfSpeech) {
+  return ownedBy(
+    userId,
+    eq(words.language, language),
+    sql`lower(${words.word}) = lower(${word})`,
+    eq(words.partOfSpeech, partOfSpeech),
+  );
 }
 
 async function findOwned(userId: string, id: string): Promise<WordRow> {
@@ -56,8 +61,8 @@ async function findOwned(userId: string, id: string): Promise<WordRow> {
   return row;
 }
 
-/** Word fields derived from an enrichment result for the given user input. */
-function enrichedFields(input: string, e: Enrichment) {
+/** Word fields derived from one enrichment entry for the given user input. */
+function enrichedFields(input: string, e: Entry) {
   return {
     word: e.lemma,
     sourceForm: e.lemma === input ? null : input,
@@ -65,8 +70,25 @@ function enrichedFields(input: string, e: Enrichment) {
     gender: e.gender,
     article: e.article,
     plural: e.plural,
+    // Only verbs conjugate, whatever the enricher sent.
+    conjugation: e.partOfSpeech === "verb" ? e.conjugation : null,
     senses: e.senses,
     enrichmentStatus: "ok" as const,
+  };
+}
+
+/** The word saved when enrichment fails: the trimmed input, ready to re-enrich. */
+function failedFields(input: string) {
+  return {
+    word: input,
+    sourceForm: null,
+    partOfSpeech: "other" as const,
+    gender: null,
+    article: null,
+    plural: null,
+    conjugation: null,
+    senses: [],
+    enrichmentStatus: "failed" as const,
   };
 }
 
@@ -88,8 +110,13 @@ async function enrichWithCache(enricher: Enricher, key: CacheKey, text: string) 
   return outcome;
 }
 
-export type CreateWordResult = { word: WordDto; duplicate: boolean };
+export type CreatedWord = WordDto & { duplicate: boolean };
+export type CreateWordResult = { items: CreatedWord[]; created: boolean };
 
+/**
+ * Enriches the input and saves one word per entry (part of speech). Entries the
+ * user already has are returned unchanged with `duplicate: true`.
+ */
 export async function createWord(
   userId: string,
   input: CreateWordInput,
@@ -105,21 +132,12 @@ export async function createWord(
     throw new NotAWordError();
   }
 
-  const fields =
+  const fieldsList =
     outcome.status === "ok"
-      ? enrichedFields(text, outcome.enrichment)
-      : {
-          word: text,
-          sourceForm: null,
-          partOfSpeech: "other" as const,
-          gender: null,
-          article: null,
-          plural: null,
-          senses: [],
-          enrichmentStatus: "failed" as const,
-        };
+      ? dedupeEntries(outcome.enrichment.entries).map((e) => enrichedFields(text, e))
+      : [failedFields(text)];
 
-  const values: NewWordRow = {
+  const rows: NewWordRow[] = fieldsList.map((fields) => ({
     ...fields,
     userId,
     language: input.language,
@@ -127,17 +145,39 @@ export async function createWord(
     tags: input.tags ?? [],
     notes: input.notes ?? null,
     sourceUrl: input.sourceUrl ?? null,
-  };
+  }));
 
   // The unique index decides duplicates, which also covers concurrent requests.
-  const [inserted] = await db.insert(words).values(values).onConflictDoNothing().returning();
-  if (inserted) return { word: toWordDto(inserted), duplicate: false };
+  const inserted = await db.insert(words).values(rows).onConflictDoNothing().returning();
 
-  const existing = await db.query.words.findFirst({
-    where: sameWord(userId, input.language, fields.word),
+  const items = await Promise.all(
+    fieldsList.map(async (fields): Promise<CreatedWord> => {
+      const isSame = (r: WordRow) =>
+        r.partOfSpeech === fields.partOfSpeech &&
+        r.word.toLowerCase() === fields.word.toLowerCase();
+      const created = inserted.find(isSame);
+      if (created) return { ...toWordDto(created), duplicate: false };
+
+      const existing = await db.query.words.findFirst({
+        where: sameWord(userId, input.language, fields.word, fields.partOfSpeech),
+      });
+      if (!existing) throw new Error("Insert conflicted but no existing word was found");
+      return { ...toWordDto(existing), duplicate: true };
+    }),
+  );
+
+  return { items, created: inserted.length > 0 };
+}
+
+/** Drops entries that would collide on the unique index (same lemma and part of speech). */
+function dedupeEntries(entries: Entry[]): Entry[] {
+  const seen = new Set<string>();
+  return entries.filter((e) => {
+    const k = `${e.lemma.toLowerCase()}\u0000${e.partOfSpeech}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
   });
-  if (!existing) throw new Error("Insert conflicted but no existing word was found");
-  return { word: toWordDto(existing), duplicate: true };
 }
 
 export async function listWords(userId: string, query: ListWordsQuery) {
@@ -227,10 +267,14 @@ export async function reEnrichWord(
   if (outcome.status === "failed") throw new EnrichmentFailedError();
   if (!outcome.enrichment.isValidWord) throw new NotAWordError();
 
+  // Re-enrich updates only this word: the entry for its part of speech, else the first.
+  const { entries } = outcome.enrichment;
+  const entry = entries.find((e) => e.partOfSpeech === existing.partOfSpeech) ?? entries[0]!;
+
   try {
     const [row] = await db
       .update(words)
-      .set(enrichedFields(text, outcome.enrichment))
+      .set(enrichedFields(text, entry))
       .where(ownedBy(userId, eq(words.id, id)))
       .returning();
     if (!row) throw new NotFoundError("Word not found");

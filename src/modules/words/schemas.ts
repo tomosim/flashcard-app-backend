@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { GENDERS, PARTS_OF_SPEECH, SenseSchema } from "../../enrichment/types.js";
+import {
+  ConjugationSchema,
+  GENDERS,
+  PARTS_OF_SPEECH,
+  SenseSchema,
+} from "../../enrichment/types.js";
 import { LanguageCodeSchema } from "../../lib/languages.js";
 
 const Tags = z
@@ -36,6 +41,7 @@ export const UpdateWordSchema = z
     gender: z.enum(GENDERS).nullable(),
     article: NullableText(20),
     plural: NullableText(80),
+    conjugation: ConjugationSchema.nullable(),
     senses: z.array(SenseSchema).min(1).max(4),
     notes: NullableText(2000),
     tags: Tags,

@@ -97,6 +97,7 @@ Use three tables: `users`, `words` (one row per user per word) and `enrichment_c
 | gender                    | text               | nullable; `masculine`, `feminine`, `neuter`               |
 | article                   | text               | nullable; e.g. `der`, `die`, `das`                        |
 | plural                    | text               | nullable                                                  |
+| conjugation               | jsonb              | nullable; `Conjugation`, verbs only, see below            |
 | senses                    | jsonb              | `Sense[]`, see below                                      |
 | notes                     | text               | nullable, user's own notes                                |
 | tags                      | text\[\]           | default `{}`                                              |
@@ -104,7 +105,7 @@ Use three tables: `users`, `words` (one row per user per word) and `enrichment_c
 | enrichment\_status        | text               | `ok`, `failed`                                            |
 | created\_at / updated\_at | timestamptz        |                                                           |
 
-Unique index on `(user_id, language, lower(word))`, plus an index on `(user_id, language)` for study queries.
+Unique index on `(user_id, language, lower(word), part_of_speech)`, so the verb `laufen` and the noun `Laufen` can coexist, plus an index on `(user_id, language)` for study queries.
 
 **Sense shape (JSONB)**
 
@@ -118,6 +119,17 @@ type Sense = {
   }[]; // 1–3 per sense
 };
 // a word has 1–4 senses
+```
+
+**Conjugation shape (JSONB, verbs only)**
+
+```ts
+type Conjugation = {
+  present: { pronoun: string; form: string }[]; // 6 persons: 1st/2nd/3rd sg, 1st/2nd/3rd pl
+  past: { pronoun: string; form: string }[]; // 6 persons, simple past (German Präteritum)
+  perfect: string; // 3rd sg with auxiliary, e.g. "hat beeindruckt"
+};
+// e.g. present[2] = { pronoun: "er/sie/es", form: "steht" }
 ```
 
 **enrichment\_cache**
@@ -184,47 +196,59 @@ Register returns 409 if the email is taken. `displayName` is register-only and o
 ```
 
 1. Validate the body. `word` is 1–80 characters after trimming.
-2. Enrich (cache first, then the LLM). This yields the lemma, for example `stand` → `stehen`.
-3. If the user already has that lemma in that language, return **200** with the existing word and `"duplicate": true`. Don't create a second row.
-4. Otherwise insert it and return **201** with the full word.
-5. If enrichment fails, still save the word with `senses: []` and `enrichmentStatus: "failed"`, and return 201. The user can retry with `/re-enrich`.
+2. Enrich (cache first, then the LLM). This yields one entry per part of speech, each with its lemma, for example `stand` → verb `stehen`, or `beeindruckt` → adjective `beeindruckt` + verb `beeindrucken`.
+3. Insert one word per entry. An entry whose lemma and part of speech the user already has in that language is not inserted; the existing word is returned instead with `"duplicate": true`.
+4. Return `{ items: (Word & { duplicate: boolean })[] }` in entry order: **201** if at least one word was inserted, **200** if all were duplicates.
+5. If enrichment fails, still save one word with `senses: []` and `enrichmentStatus: "failed"`, and return 201. The user can retry with `/re-enrich`.
 
 ```json
 // 201 response
 {
-  "id": "uuid",
-  "word": "stehen",
-  "sourceForm": "stand",
-  "language": "de",
-  "targetLanguage": "en",
-  "partOfSpeech": "verb",
-  "gender": null,
-  "article": null,
-  "plural": null,
-  "senses": [
+  "items": [
     {
-      "translation": "to stand",
-      "examples": [{ "text": "Er steht an der Tür.", "translation": "He is standing at the door." }]
-    },
-    {
-      "translation": "to stagnate, to be at a standstill",
-      "examples": [
-        { "text": "Die Verhandlungen stehen.", "translation": "The negotiations have stalled." }
-      ]
+      "id": "uuid",
+      "word": "stehen",
+      "sourceForm": "stand",
+      "language": "de",
+      "targetLanguage": "en",
+      "partOfSpeech": "verb",
+      "gender": null,
+      "article": null,
+      "plural": null,
+      "conjugation": {
+        "present": [{ "pronoun": "ich", "form": "stehe" } /* …6 in total */],
+        "past": [{ "pronoun": "ich", "form": "stand" } /* …6 in total */],
+        "perfect": "hat gestanden"
+      },
+      "senses": [
+        {
+          "translation": "to stand",
+          "examples": [
+            { "text": "Er steht an der Tür.", "translation": "He is standing at the door." }
+          ]
+        },
+        {
+          "translation": "to stagnate, to be at a standstill",
+          "examples": [
+            { "text": "Die Verhandlungen stehen.", "translation": "The negotiations have stalled." }
+          ]
+        }
+      ],
+      "notes": null,
+      "tags": ["news"],
+      "sourceUrl": "https://...",
+      "enrichmentStatus": "ok",
+      "createdAt": "...",
+      "updatedAt": "...",
+      "duplicate": false
     }
-  ],
-  "notes": null,
-  "tags": ["news"],
-  "sourceUrl": "https://...",
-  "enrichmentStatus": "ok",
-  "createdAt": "...",
-  "updatedAt": "..."
+  ]
 }
 ```
 
 **GET /words**: query `language?`, `search?` (case-insensitive match on the word or any translation), `tag?`, `page` (default 1), `pageSize` (default 20, max 100), `sort` (`createdAt` desc by default, or `word`). Response: `{ items: Word[], page, pageSize, total }`.
 
-**PATCH /words/:id**: any subset of `word, partOfSpeech, gender, article, plural, senses, notes, tags`. The whole `senses` array is replaced when sent. Validate with the same Zod schemas.
+**PATCH /words/:id**: any subset of `word, partOfSpeech, gender, article, plural, conjugation, senses, notes, tags`. The whole `senses` array (and `conjugation` object) is replaced when sent. Validate with the same Zod schemas.
 
 **GET /study/batch**: query `language` (required), `limit` (default 10, max 50). Returns up to `limit` random words with `enrichmentStatus = ok`, as `{ items: Word[] }`. Use `ORDER BY random()`, which is fine at this scale. Fewer words than `limit` returns what exists; zero returns an empty array.
 
@@ -239,14 +263,19 @@ interface Enricher {
   enrich(input: { text: string; language: string; targetLanguage: string }): Promise<Enrichment>;
 }
 
-const EnrichmentSchema = z.object({
-  isValidWord: z.boolean(), // false for gibberish or wrong language
+const EntrySchema = z.object({
   lemma: z.string().min(1), // dictionary form
   partOfSpeech: z.enum(["noun", "verb", "adjective", "adverb", "phrase", "other"]),
   gender: z.enum(["masculine", "feminine", "neuter"]).nullable(),
   article: z.string().nullable(),
   plural: z.string().nullable(),
+  conjugation: ConjugationSchema.nullable(), // verbs only; forced to null on save for other parts of speech
   senses: z.array(SenseSchema).min(1).max(4),
+});
+
+const EnrichmentSchema = z.object({
+  isValidWord: z.boolean(), // false for gibberish or wrong language
+  entries: z.array(EntrySchema).min(1).max(3), // one per part of speech, most common first
 });
 ```
 
@@ -257,11 +286,11 @@ const EnrichmentSchema = z.object({
 3. On a miss, call the enricher with a 15-second timeout and one retry on network or 5xx errors.
 4. Validate the result with `EnrichmentSchema`. If validation fails, the status is `failed`.
 5. If `isValidWord` is false, return **422** `{ error: "NOT_A_WORD" }` and save nothing.
-6. Write the result to the cache, then insert the word.
+6. Write the result to the cache, then insert one word per entry.
 
 **ClaudeEnricher**
 
-- Model `claude-haiku-5-5`, `max_tokens: 1024`, temperature 0.
+- Model `claude-haiku-5-5`, `max_tokens: 2500` (two entries plus conjugation tables can exceed 1024).
 - Force JSON by defining one tool, `save_word`, whose `input_schema` is the JSON Schema of `EnrichmentSchema` (generate it with `zod-to-json-schema`), and setting `tool_choice: { type: "tool", name: "save_word" }`. Read the tool call's `input` and validate it with Zod.
 - Log input and output token counts for each call.
 
@@ -274,18 +303,37 @@ learner at roughly B1–B2 level. You will receive a word or short phrase in
 
 Return, via the save_word tool:
 - isValidWord: false if the input is not a real {language} word or phrase.
-- lemma: the dictionary form. Capitalise nouns where the language requires it.
-- partOfSpeech, and for nouns: gender, definite article, and plural form.
-- senses: 1–4 distinct, common meanings, most frequent first. Each has a
-  concise English translation (several synonyms comma-separated are fine) and
-  1–2 natural, everyday example sentences in {language}, 6–14 words long,
-  each with an English translation. Use the lemma in a natural inflected form.
+- entries: one entry per distinct part of speech the input form is commonly
+  used as, most common first (at most 3). For example, German "beeindruckt" is
+  both the adjective "beeindruckt" and a form of the verb "beeindrucken", so it
+  gets two entries. A participle that is also a common adjective counts as both.
+  Most words have a single entry; do not add entries for rare or archaic uses.
+
+Each entry has:
+- lemma: the dictionary form for that part of speech. Capitalise nouns where
+  the language requires it.
+- partOfSpeech, and for nouns: gender, definite article, and plural form
+  (otherwise null).
+- conjugation: for verbs only (null for every other part of speech):
+  - present: the 6 present-tense forms, each { pronoun, form }, with the
+    {language} pronoun, in standard order: 1st, 2nd, 3rd person singular, then
+    1st, 2nd, 3rd person plural (for German: ich, du, er/sie/es, wir, ihr, sie).
+    "form" is the verb form alone, without the pronoun; separable verbs keep
+    the particle (e.g. "fange an").
+  - past: the same 6 persons in the simple past (German: Präteritum).
+  - perfect: the 3rd person singular perfect with its auxiliary
+    (e.g. "hat beeindruckt", "ist gegangen").
+- senses: 1–4 distinct, common meanings for that part of speech, most frequent
+  first. Each has a concise English translation (several synonyms
+  comma-separated are fine) and 1–2 natural, everyday example sentences in
+  {language}, 6–14 words long, each with an English translation. Use the lemma
+  in a natural inflected form.
 Do not invent rare or archaic meanings.
 ```
 
 User message: `Word: "{text}"`.
 
-**MockEnricher** returns a fixed, plausible result built from the input. For example, the lemma is the input, there is one sense with translation `"[mock] {text}"`, and there is one example. The input `"xxinvalid"` returns `isValidWord: false`, so the 422 path can be tested.
+**MockEnricher** returns a fixed, plausible result built from the input. For example, there is one entry whose lemma is the input, with one sense with translation `"[mock] {text}"`, and there is one example. The input `"xxinvalid"` returns `isValidWord: false`, so the 422 path can be tested. A few known inputs map to lemmas (`stand` → verb `stehen`, with a placeholder conjugation), and `beeindruckt` returns two entries (adjective + verb) to test multi-word creation.
 
 ## Config, errors and testing
 
