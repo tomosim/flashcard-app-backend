@@ -73,6 +73,28 @@ export const words = pgTable(
   ],
 );
 
+export const apiTokens = pgTable(
+  "api_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    // SHA-256 hex of the full token. The raw token is never stored.
+    tokenHash: text("token_hash").notNull().unique(),
+    // First 12 characters of the token, for display only.
+    prefix: text("prefix").notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("api_tokens_user_id_idx").on(t.userId),
+    check("api_tokens_name_length_check", sql`char_length(${t.name}) between 1 and 50`),
+  ],
+);
+
 export const enrichmentCache = pgTable(
   "enrichment_cache",
   {
@@ -91,3 +113,4 @@ export type UserRow = typeof users.$inferSelect;
 export type WordRow = typeof words.$inferSelect;
 export type NewWordRow = typeof words.$inferInsert;
 export type EnrichmentCacheRow = typeof enrichmentCache.$inferSelect;
+export type ApiTokenRow = typeof apiTokens.$inferSelect;

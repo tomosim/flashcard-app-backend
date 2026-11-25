@@ -28,6 +28,7 @@ Learners save foreign-language words they come across, for example while reading
 - `POST /auth/register` and `POST /auth/login` return a JWT access token.
 - Send it on every other request (everything except `/health`, `/auth/register` and `/auth/login`) as `Authorization: Bearer <token>`.
 - Tokens last **7 days** by default. There is no refresh token and no logout endpoint. To log out, the client discards the token.
+- **Personal API tokens** (`vocab_…`) are a long-lived alternative for scripts such as an iPhone Shortcut. They're sent the same way, `Authorization: Bearer vocab_…`, and work on every authenticated route except `/tokens`. Users create, list and revoke them through the [`/tokens` endpoints](#post-tokens), which only accept a login JWT. The web app only needs to offer a token management screen; it keeps using the JWT itself.
 - Any `401 UNAUTHORIZED` from an authenticated route means the token is missing, invalid or expired, or the user no longer exists. The client should clear the token and send the user to the login screen.
 - **Rate limit:** every `/auth/*` route, including `/auth/me`, is limited to **10 requests per minute per IP**. Going over returns `429 RATE_LIMITED`. Responses carry standard `RateLimit` and `RateLimit-Policy` headers (IETF draft-8), e.g. `RateLimit: "10-in-1min"; r=9; t=60`. Avoid calling `/auth/me` on every page load. Call it once at startup and keep the user in client state.
 
@@ -51,8 +52,10 @@ type ApiError = {
 | ------ | ---------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | 400    | `VALIDATION_ERROR`     | Invalid body, query or path id (`details` lists fields), malformed JSON (`"Malformed JSON body"`) or body over 100 kB   |
 | 401    | `UNAUTHORIZED`         | Missing, invalid or expired token (`"Missing or invalid access token"`), or wrong login (`"Invalid email or password"`) |
+| 403    | `FORBIDDEN`            | An API token was sent to a `/tokens` endpoint, which needs a login JWT                                                  |
 | 404    | `NOT_FOUND`            | Unknown word id, a word that belongs to another user (`"Word not found"`), or an unknown route (`"Route not found"`)    |
 | 409    | `EMAIL_TAKEN`          | Registering an email that already has an account                                                                        |
+| 409    | `TOKEN_LIMIT_REACHED`  | Creating an API token when the user already has 10 active ones                                                          |
 | 409    | `DUPLICATE_WORD`       | Renaming (PATCH) or re-enriching a word into one the user already has (same lemma and part of speech, same language)    |
 | 422    | `NOT_A_WORD`           | The enricher says the input isn't a real word in that language                                                          |
 | 422    | `UNSUPPORTED_LANGUAGE` | A well-formed language code that isn't in the server's supported list, e.g. `"Language \"en\" is not supported"`        |
@@ -142,6 +145,14 @@ type Paginated<T> = {
 };
 
 type LanguageCount = { language: string; count: number };
+
+type ApiToken = {
+  id: string; // UUID
+  name: string; // e.g. "iPhone Shortcut"
+  prefix: string; // first 12 characters of the token, e.g. "vocab_AbC123", to tell tokens apart
+  createdAt: string; // ISO 8601
+  lastUsedAt: string | null; // ISO 8601, accurate to about a minute; null if never used
+};
 ```
 
 Example `Word` (illustrative, as the real enricher would return it). This one was saved from the input `"Häuser"`, so `word` holds the lemma and `sourceForm` holds the typed form:
@@ -226,6 +237,9 @@ Example `conjugation` on the verb `beeindrucken`:
 | DELETE | `/words`               | Yes  | 200 `{ deleted: number }`        |
 | GET    | `/study/batch`         | Yes  | 200 `{ items: Word[] }`          |
 | GET    | `/languages`           | Yes  | 200 `{ items: LanguageCount[] }` |
+| POST   | `/tokens`              | JWT  | 201 `ApiToken` + `token`         |
+| GET    | `/tokens`              | JWT  | 200 `{ items: ApiToken[] }`      |
+| DELETE | `/tokens/:id`          | JWT  | 204, no body                     |
 
 All words endpoints return `404 NOT_FOUND` for a word id that doesn't exist or belongs to someone else, and `400 VALIDATION_ERROR` for an id that isn't a UUID.
 
@@ -441,6 +455,50 @@ Response:
   ]
 }
 ```
+
+---
+
+### `POST /tokens`
+
+Creates a personal API token. **Needs a login JWT**: an API token gets `403 FORBIDDEN`.
+
+Body: `{ "name": string }`, 1–50 characters after trimming, e.g. `"iPhone Shortcut"`.
+
+Response: `201` with the new token's fields and the raw `token`:
+
+```json
+{
+  "id": "5b0c…",
+  "name": "iPhone Shortcut",
+  "prefix": "vocab_AbC123",
+  "createdAt": "2026-11-25T18:00:00.000Z",
+  "token": "vocab_AbC123…"
+}
+```
+
+The raw `token` appears **only in this response**. The server keeps just a hash, so it can never be shown again. Show it once with a copy button and a clear warning. A lost token can't be recovered; revoke it and create a new one.
+
+Errors: `400 VALIDATION_ERROR`, `403 FORBIDDEN`, `409 TOKEN_LIMIT_REACHED` (10 active tokens already; revoke one first).
+
+---
+
+### `GET /tokens`
+
+The user's active (non-revoked) tokens, newest first. **Needs a login JWT.** Never includes the token or its hash.
+
+Response: `200 { "items": ApiToken[] }`.
+
+Errors: `403 FORBIDDEN`.
+
+---
+
+### `DELETE /tokens/:id`
+
+Revokes a token. It stops working immediately and disappears from the list. **Needs a login JWT.**
+
+Response: `204`, empty body.
+
+Errors: `400 VALIDATION_ERROR` (not a UUID), `403 FORBIDDEN`, `404 NOT_FOUND` (unknown, another user's, or already revoked).
 
 ## Behaviour the UI should handle
 

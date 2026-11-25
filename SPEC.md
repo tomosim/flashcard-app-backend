@@ -9,6 +9,7 @@ Build a Node + TypeScript REST API where each logged-in user saves foreign-langu
 **In scope for v1**
 
 - Email and password registration and login (JWT)
+- Personal API tokens, so an iPhone Shortcut can call the API without logging in
 - Add a word by sending only `word` + `language`; the server enriches it
 - Browse, edit and delete your own words
 - Random study batches (default 10) for one language
@@ -17,7 +18,7 @@ Build a Node + TypeScript REST API where each logged-in user saves foreign-langu
 **Out of scope for v1**
 
 - Spaced repetition and review scheduling
-- iPhone Shortcut capture and personal API tokens
+- The iPhone Shortcut itself (the API supports it through personal API tokens)
 - Base languages other than English (all translations are into English)
 - Import and export, stats, social features
 - The React + Vite frontend (separate spec)
@@ -50,7 +51,7 @@ src/
     client.ts
     migrations/
   middleware/
-    auth.ts           # requireAuth, sets req.user
+    auth.ts           # requireAuth (JWT or API token), requireJwt; set req.user
     validate.ts       # Zod validation helper
     errorHandler.ts
   modules/
@@ -58,12 +59,14 @@ src/
     words/  (routes.ts, service.ts, schemas.ts)
     study/  (routes.ts, service.ts)
     languages/ (routes.ts, service.ts)
+    tokens/ (routes.ts, service.ts, schemas.ts)
   enrichment/
     types.ts          # Enricher interface + Zod schema
     claudeEnricher.ts
     mockEnricher.ts
     index.ts          # picks enricher from config
   lib/errors.ts       # AppError classes
+  lib/apiTokens.ts    # API token generation and hashing
 tests/
 docker-compose.yml
 .env.example
@@ -71,7 +74,7 @@ docker-compose.yml
 
 ## Data model
 
-Use three tables: `users`, `words` (one row per user per word) and `enrichment_cache` (shared across users, so a word is only paid for once). Meanings and examples are stored as a JSONB array on the word. They are always read and edited together, so separate tables would add joins for no benefit in v1.
+Use four tables: `users`, `words` (one row per user per word), `enrichment_cache` (shared across users, so a word is only paid for once) and `api_tokens` (personal API tokens). Meanings and examples are stored as a JSONB array on the word. They are always read and edited together, so separate tables would add joins for no benefit in v1.
 
 **users**
 
@@ -132,6 +135,21 @@ type Conjugation = {
 // e.g. present[2] = { pronoun: "er/sie/es", form: "steht" }
 ```
 
+**api\_tokens**
+
+| Column         | Type               | Notes                                                        |
+| -------------- | ------------------ | ------------------------------------------------------------ |
+| id             | uuid PK            |                                                              |
+| user\_id       | uuid FK → users.id | on delete cascade, indexed                                   |
+| name           | text               | 1–50 characters, e.g. `iPhone Shortcut`                      |
+| token\_hash    | text               | unique; SHA-256 hex of the full token (raw token never kept) |
+| prefix         | text               | first 12 characters of the token, for display only           |
+| last\_used\_at | timestamptz        | nullable; written at most once a minute                      |
+| revoked\_at    | timestamptz        | nullable; set on revoke, the row is kept                     |
+| created\_at    | timestamptz        | default now()                                                |
+
+A user can have at most 10 active (non-revoked) tokens.
+
 **enrichment\_cache**
 
 | Column           | Type        | Notes                                 |
@@ -147,15 +165,18 @@ API responses use camelCase (`sourceForm`, `partOfSpeech`); map from snake\_case
 
 ## Auth
 
-Auth uses stateless JWTs with email and password. Every route except register, login and health requires `Authorization: Bearer <token>`.
+Auth uses stateless JWTs with email and password, plus long-lived personal API tokens for scripts such as an iPhone Shortcut. Every route except register, login and health requires `Authorization: Bearer <token>`, where the token is a JWT or an API token.
 
 - Passwords: argon2id, minimum 8 characters, validated with Zod.
 - Access token: JWT signed with HS256 using `JWT_SECRET`, payload `{ sub: userId }`, expires in 7 days. There are no refresh tokens in v1.
-- `requireAuth` middleware verifies the token and sets `req.user = { id }`. It returns 401 if the token is missing, invalid or expired.
+- `requireAuth` middleware accepts either kind of token. A Bearer value starting with `vocab_` is an API token: it is SHA-256 hashed and looked up among non-revoked tokens, giving `req.user = { id, authType: "apiToken" }`. Anything else is verified as a JWT, giving `req.user = { id, authType: "jwt" }`. Every failure (missing, malformed, expired, unknown or revoked) returns the same 401 message.
+- `requireJwt` accepts only a JWT. It guards the `/tokens` endpoints so a leaked API token can't mint new tokens or revoke others. A valid API token gets **403 FORBIDDEN** (not 401, because the token itself is valid and the client shouldn't discard it); an invalid one still gets 401.
+- API tokens: `vocab_` + 32 bytes from `crypto.randomBytes`, base64url-encoded (49 characters). Only the SHA-256 hash is stored; a fast hash is fine because the tokens are 256 bits of randomness, not passwords. The raw token is shown once, in the create response. Tokens don't expire; they're revoked by the user.
+- `last_used_at` is updated at most once a minute per token, in the background (not awaited in the request path), so a failed write never fails the request.
 - Every word query is scoped by `user_id = req.user.id`. Another user's word returns 404, not 403, so ids can't be probed.
 - Login returns the same 401 message for a wrong email or a wrong password.
 - Rate-limit `/auth/*` with express-rate-limit (10 requests per minute per IP).
-- Later: personal API tokens for the iPhone Shortcut, and refresh tokens in httpOnly cookies for the web app.
+- Later: refresh tokens in httpOnly cookies for the web app.
 
 ## API endpoints
 
@@ -176,6 +197,9 @@ All routes are under `/api/v1`, take and return JSON, and use camelCase. Support
 | DELETE | /words               | Yes  | Delete all the caller's words, returns `{ deleted }` |
 | GET    | /study/batch         | Yes  | Random flashcard batch for one language              |
 | GET    | /languages           | Yes  | The user's languages with word counts                |
+| POST   | /tokens              | JWT  | Create a personal API token                          |
+| GET    | /tokens              | JWT  | List the caller's active API tokens                  |
+| DELETE | /tokens/:id          | JWT  | Revoke an API token, returns 204                     |
 
 **POST /auth/register** and **/auth/login**
 
@@ -253,6 +277,12 @@ Register returns 409 if the email is taken. `displayName` is register-only and o
 **GET /study/batch**: query `language` (required), `limit` (default 10, max 50). Returns up to `limit` random words with `enrichmentStatus = ok`, as `{ items: Word[] }`. Use `ORDER BY random()`, which is fine at this scale. Fewer words than `limit` returns what exists; zero returns an empty array.
 
 **GET /languages**: `{ items: [{ language: "de", count: 42 }] }`, sorted by count descending.
+
+**POST /tokens** (JWT only): body `{ "name": "iPhone Shortcut" }` (1–50 characters after trimming). Returns **201** `{ id, name, prefix, createdAt, token }`. This is the only response that ever contains the raw `token`. A user with 10 active tokens gets **409 TOKEN\_LIMIT\_REACHED**; the count and insert run in one transaction that locks the user row, so concurrent requests can't exceed the limit.
+
+**GET /tokens** (JWT only): `{ items: [{ id, name, prefix, createdAt, lastUsedAt }] }`, active tokens only, newest first. Never includes the token or its hash.
+
+**DELETE /tokens/:id** (JWT only): sets `revoked_at` and returns **204**. Returns **404** if the token belongs to another user or is already revoked.
 
 ## Enrichment
 
@@ -357,8 +387,10 @@ CORS_ORIGIN=http://localhost:5173
 | ------ | --------------------- | --------------------------------------------- |
 | 400    | VALIDATION\_ERROR     | Zod failure; `details` holds the field issues |
 | 401    | UNAUTHORIZED          | Missing or invalid token, or bad credentials  |
+| 403    | FORBIDDEN             | An API token used on a JWT-only route         |
 | 404    | NOT\_FOUND            | Unknown id, or a word owned by another user   |
 | 409    | EMAIL\_TAKEN          | Register with an existing email               |
+| 409    | TOKEN\_LIMIT\_REACHED | Creating an 11th active API token             |
 | 422    | NOT\_A\_WORD          | Enricher says the input isn't a real word     |
 | 422    | UNSUPPORTED\_LANGUAGE | Language not in the allow-list                |
 | 429    | RATE\_LIMITED         | Too many auth attempts                        |
@@ -370,6 +402,7 @@ Other middleware: helmet, cors (origin from config), `express.json({ limit: "100
 
 - Auth: register, duplicate email, login with right and wrong password, `/me` with and without a token.
 - Words: create; inflected input saves the lemma; a duplicate returns 200 with `duplicate: true`; 422 for an invalid word; list with pagination and search; PATCH senses; delete; user A can't read user B's word (404).
+- API tokens: the raw token is returned once and only its hash is stored; an API token can add words and fetch study batches; revoked and made-up tokens get 401; user A can't list or revoke user B's tokens (404); an API token gets 403 on `/tokens`; the 11th active token gets 409, also under concurrent requests; `last_used_at` is set after use and written at most once a minute.
 - Study: returns at most `limit` words, only in the requested language, only the caller's words, and an empty array when there are none.
 - Enrichment: a cache hit skips the enricher (spy on it); a schema-invalid enricher output saves the word with `failed`.
 - Tests never use the Claude API, with or without `ANTHROPIC_API_KEY`. Under the test runner the config forces `ENRICHER=mock` and drops the API key, `createEnricher` always returns the MockEnricher, the `ClaudeEnricher` constructor throws, and the test setup blocks any request to `anthropic.com`. Tests check that each of these guards holds. The ClaudeEnricher is checked by hand with `ENRICHER=claude npm run dev`.

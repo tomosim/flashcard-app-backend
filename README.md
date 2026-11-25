@@ -74,7 +74,7 @@ Adding a word runs it through an enricher, which returns one entry per part of s
 
 Full reference (types, validation rules, every error, UI notes): [docs/API.md](docs/API.md).
 
-All routes are under `/api/v1` and use JSON with camelCase fields. Every route except health, register and login needs `Authorization: Bearer <token>`.
+All routes are under `/api/v1` and use JSON with camelCase fields. Every route except health, register and login needs `Authorization: Bearer <token>`, where the token is either a login JWT or a personal API token (`vocab_…`, see [API tokens](#api-tokens-for-scripts-and-the-iphone-shortcut)).
 
 Errors always look like this:
 
@@ -92,9 +92,11 @@ Errors always look like this:
 | ------ | ---------------------- | ---------------------------------------------------------- |
 | 400    | `VALIDATION_ERROR`     | Invalid body, query or id; `details` lists the fields      |
 | 401    | `UNAUTHORIZED`         | Missing, invalid or expired token, or wrong email/password |
+| 403    | `FORBIDDEN`            | An API token used on `/tokens` (those need a login JWT)    |
 | 404    | `NOT_FOUND`            | Unknown id, or a word that belongs to another user         |
 | 409    | `EMAIL_TAKEN`          | Registering an email that already exists                   |
 | 409    | `DUPLICATE_WORD`       | Renaming or re-enriching a word into one you already have  |
+| 409    | `TOKEN_LIMIT_REACHED`  | Creating an API token when you already have 10 active      |
 | 422    | `NOT_A_WORD`           | The enricher says the input isn't a real word              |
 | 422    | `UNSUPPORTED_LANGUAGE` | Language not in `SUPPORTED_LANGUAGES`                      |
 | 429    | `RATE_LIMITED`         | More than 10 `/auth/*` requests per minute from one IP     |
@@ -196,6 +198,39 @@ curl $API/languages -H "$AUTH"
 # {"items":[{"language":"de","count":15}]}
 ```
 
+### API tokens (for scripts and the iPhone Shortcut)
+
+A personal API token is a long-lived alternative to logging in. Send it exactly like a JWT: `Authorization: Bearer vocab_…`. It works on every route except `/tokens`, which only accepts a login JWT (an API token there gets `403 FORBIDDEN`), so a leaked token can't create or revoke tokens. Tokens don't expire; revoke one when you no longer need it. You can have up to 10 active tokens.
+
+**Create a token** (201) with your login JWT. The `token` is shown **only in this response**; the server stores just its hash, so copy it now.
+
+```bash
+curl -X POST $API/tokens -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"name":"iPhone Shortcut"}'
+# {"id":"…","name":"iPhone Shortcut","prefix":"vocab_AbC123","createdAt":"…","token":"vocab_AbC123…"}
+```
+
+**Use it** in place of the JWT, e.g. to save a word from a Shortcut:
+
+```bash
+VOCAB_TOKEN=vocab_…
+curl -X POST $API/words -H "Authorization: Bearer $VOCAB_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"word":"beeindruckt","language":"de","tags":["shortcut"]}'
+```
+
+**List your active tokens**, newest first. Shows the `prefix` and `lastUsedAt`, never the token itself.
+
+```bash
+curl $API/tokens -H "$AUTH"
+# {"items":[{"id":"…","name":"iPhone Shortcut","prefix":"vocab_AbC123","createdAt":"…","lastUsedAt":"…"}]}
+```
+
+**Revoke a token** (204). It stops working immediately.
+
+```bash
+curl -X DELETE $API/tokens/$TOKEN_ID -H "$AUTH"
+```
+
 ## Project layout
 
 ```
@@ -205,9 +240,9 @@ src/
   config.ts           # env vars parsed with Zod
   db/                 # Drizzle schema, client, migrations, migrate + seed scripts
   middleware/         # requireAuth, validate, errorHandler, rate limiting
-  modules/            # auth, words, study, languages: routes -> service -> db
+  modules/            # auth, words, study, languages, tokens: routes -> service -> db
   enrichment/         # Enricher interface, mock + Claude enrichers, cache, retry/timeout
-  lib/                # errors, logger, JWT, languages
+  lib/                # errors, logger, JWT, API token hashing, languages
 tests/                # Vitest + Supertest against a real test database
 ```
 
