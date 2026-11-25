@@ -6,7 +6,7 @@ const app = createApp();
 
 const server = app.listen(config.port, () => {
   logger.info(
-    `API listening on http://localhost:${config.port}/api/v1 (enricher: ${config.enricher})`,
+    `API listening on ${config.port} (enricher: ${config.enricher})`,
   );
 });
 
