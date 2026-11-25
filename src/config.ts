@@ -48,22 +48,22 @@ function loadConfig() {
     console.error("Invalid environment configuration:\n" + z.prettifyError(parsed.error));
     process.exit(1);
   }
-  const env = parsed.data;
+  const processEnv = parsed.data;
   const isTest = isTestRuntime();
   return {
-    env: isTest ? ("test" as const) : env.NODE_ENV,
+    env: isTest ? ("test" as const) : processEnv.NODE_ENV,
     isTest,
-    port: env.PORT,
+    port: processEnv.PORT,
     // Tests always run against the separate test database.
     // TEST_DATABASE_URL is guaranteed under tests by the check above.
-    databaseUrl: isTest ? env.TEST_DATABASE_URL! : env.DATABASE_URL,
-    jwtSecret: env.JWT_SECRET,
-    jwtExpiresIn: env.JWT_EXPIRES_IN,
+    databaseUrl: isTest ? processEnv.TEST_DATABASE_URL! : processEnv.DATABASE_URL,
+    jwtSecret: processEnv.JWT_SECRET,
+    jwtExpiresIn: processEnv.JWT_EXPIRES_IN,
     // Tests always use the mock enricher and never see an API key, whatever the env says.
-    enricher: isTest ? ("mock" as const) : env.ENRICHER,
-    anthropicApiKey: isTest ? undefined : env.ANTHROPIC_API_KEY || undefined,
-    supportedLanguages: env.SUPPORTED_LANGUAGES,
-    corsOrigin: env.CORS_ORIGIN,
+    enricher: isTest ? ("mock" as const) : processEnv.ENRICHER,
+    anthropicApiKey: isTest ? undefined : processEnv.ANTHROPIC_API_KEY || undefined,
+    supportedLanguages: processEnv.SUPPORTED_LANGUAGES,
+    corsOrigin: processEnv.CORS_ORIGIN,
   } as const;
 }
 
