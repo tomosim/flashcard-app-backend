@@ -7,6 +7,9 @@ const EnvSchema = z
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
     PORT: z.coerce.number().int().positive().default(3000),
     DATABASE_URL: z.url(),
+    // Direct (non-pooled) connection for migrations, e.g. Neon's DATABASE_URL_UNPOOLED.
+    // Falls back to DATABASE_URL when unset (e.g. local Docker Postgres).
+    DATABASE_URL_UNPOOLED: z.url().optional(),
     // Required only under the test runner; production never uses it.
     TEST_DATABASE_URL: z.url().optional(),
     JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
@@ -57,6 +60,9 @@ function loadConfig() {
     // Tests always run against the separate test database.
     // TEST_DATABASE_URL is guaranteed under tests by the check above.
     databaseUrl: isTest ? processEnv.TEST_DATABASE_URL! : processEnv.DATABASE_URL,
+    migrationDatabaseUrl: isTest
+      ? processEnv.TEST_DATABASE_URL!
+      : (processEnv.DATABASE_URL_UNPOOLED ?? processEnv.DATABASE_URL),
     jwtSecret: processEnv.JWT_SECRET,
     jwtExpiresIn: processEnv.JWT_EXPIRES_IN,
     // Tests always use the mock enricher and never see an API key, whatever the env says.

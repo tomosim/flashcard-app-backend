@@ -5,9 +5,7 @@ import { logger } from "./lib/logger.js";
 const app = createApp();
 
 const server = app.listen(config.port, () => {
-  logger.info(
-    `API listening on ${config.port} (enricher: ${config.enricher})`,
-  );
+  logger.info(`API listening on ${config.port} (enricher: ${config.enricher})`);
 });
 
 function shutdown(signal: string) {
